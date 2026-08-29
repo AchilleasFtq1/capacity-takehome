@@ -6,7 +6,7 @@ import (
 	"github.com/tktaofik/capacity-takehome/api/internal/capacity"
 )
 
-// testCaps mirrors the defaults in BRIEF.md: sub-caps sum to 9, budget is 8.
+// testCaps mirrors the README defaults: sub-caps sum to 9, budget is 8.
 func testCaps() capacity.Caps {
 	return capacity.Caps{
 		Budget: 8,

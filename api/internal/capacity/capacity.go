@@ -4,7 +4,7 @@
 // a decision needs is passed in, which is what makes the rules cheap to test
 // and impossible to accidentally scatter across resolvers.
 //
-// The four rules these functions must satisfy are in BRIEF.md. Read them there,
+// The four rules these functions must satisfy are in the README. Read them there,
 // not here.
 package capacity
 

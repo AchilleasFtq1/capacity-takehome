@@ -13,7 +13,7 @@ type ctxKey struct{}
 var ErrNoUser = errors.New("no caller: send an X-User-Id header")
 
 // WithUser puts the caller on the context. There is no real auth in this
-// exercise and there should not be - see BRIEF.md, out of scope.
+// exercise and there should not be - see README, out of scope.
 func WithUser(ctx context.Context, id bson.ObjectID) context.Context {
 	return context.WithValue(ctx, ctxKey{}, id)
 }
