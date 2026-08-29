@@ -3,8 +3,13 @@
 Build a small social app where the contact list has a hard ceiling. The features
 are simple. The rules underneath them are not — that's the exercise.
 
-**6–8 hours, one day.** Use AI agents freely; we do. It ends with a 45-minute
-call where you demo it and make one live change.
+**4 hours.** Use AI agents freely; we do. It ends with a 45-minute call where
+you demo it and make one live change.
+
+Four hours will not comfortably fit everything below, and it isn't meant to.
+What you choose to build first, and what you consciously drop, is part of what
+we're reading. R1–R6 is the core; R7 and R8 exist for the unlikely case you're
+early. Say in your README what you left and why.
 
 ## Run it
 
@@ -43,9 +48,9 @@ genuinely blocks you, a web client is fine; say so.
 
 | Tier | Cap |
 |---|---|
-| Partner | 1 |
-| Crew | 3 |
-| Circle | 5 |
+| Pink flag | 1 |
+| Blue flag | 3 |
+| Green flag | 5 |
 | **Shared budget** | **8** |
 
 Sub-caps sum to 9. The budget is 8. That gap is deliberate.
@@ -70,14 +75,14 @@ deployment, visual polish.
 
 Most of the grade is here, not in the screens.
 
-**1. Budget before sub-cap.** 3 Crew + 5 Circle is 8 of 8. That person cannot
-add a Partner, even though Partner is empty. The sum is checked first.
+**1. Budget before sub-cap.** 3 Blue + 5 Green is 8 of 8. That person cannot add
+a Pink flag, even though Pink is empty. The sum is checked first.
 
 **2. A pending request holds no seat.** Sending creates no contact. One free
 seat buys unlimited outstanding requests. Capacity is checked at **accept**,
 against **both** people — either side being full fails it.
 
-**3. Re-filing is not adding.** Moving Circle → Crew checks the destination
+**3. Re-filing is not adding.** Moving Green → Blue checks the destination
 sub-cap only, never the budget. The contact is already inside the budget; a
 budget check here blocks a legal move.
 
@@ -106,7 +111,7 @@ mobile/App.tsx                 a user switcher, so you can act as anyone. replac
 ```
 
 Worth knowing: Mongo is on **27117**, not 27017, so it can't collide with one
-you already run. Caps are env vars — try `CAP_CIRCLE=500 make api`, nothing
+you already run. Caps are env vars — try `CAP_GREEN=500 make api`, nothing
 should need recompiling. On a physical device set
 `EXPO_PUBLIC_API_URL=http://<your-lan-ip>:8080/query`.
 

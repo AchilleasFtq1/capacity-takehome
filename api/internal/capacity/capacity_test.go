@@ -11,16 +11,16 @@ func testCaps() capacity.Caps {
 	return capacity.Caps{
 		Budget: 8,
 		PerTier: map[capacity.Tier]int{
-			capacity.Partner: 1,
-			capacity.Crew:    3,
-			capacity.Circle:  5,
+			capacity.Pink:  1,
+			capacity.Blue:  3,
+			capacity.Green: 5,
 		},
 	}
 }
 
 // Rule 1 - the shared budget binds before the sub-cap.
-// 3 in Crew and 5 in Circle is 8 of 8, so Partner is unreachable even though
-// Partner is empty and its cap is 1.
+// 3 in Blue and 5 in Green is 8 of 8, so Pink is unreachable even though
+// Pink is empty and its cap is 1.
 func TestBudgetBindsBeforeSubCap(t *testing.T) {
 	t.Skip("delete this line and write the test")
 	_ = testCaps()

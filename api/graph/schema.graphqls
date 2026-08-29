@@ -1,9 +1,9 @@
 scalar Time
 
 enum Tier {
-  PARTNER
-  CREW
-  CIRCLE
+  PINK
+  BLUE
+  GREEN
 }
 
 enum RequestStatus {

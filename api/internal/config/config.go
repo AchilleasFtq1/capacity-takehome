@@ -1,6 +1,6 @@
 // Package config loads the tier caps.
 //
-// Caps are configuration, never compile-time constants: raising CIRCLE from 5
+// Caps are configuration, never compile-time constants: raising GREEN from 5
 // to 500 is an env change and nothing else. This is already done for you - do
 // not reintroduce a hardcoded cap in the enforcement path.
 package config
@@ -17,9 +17,9 @@ func Load() capacity.Caps {
 	return capacity.Caps{
 		Budget: intEnv("CAP_BUDGET", 8),
 		PerTier: map[capacity.Tier]int{
-			capacity.Partner: intEnv("CAP_PARTNER", 1),
-			capacity.Crew:    intEnv("CAP_CREW", 3),
-			capacity.Circle:  intEnv("CAP_CIRCLE", 5),
+			capacity.Pink:  intEnv("CAP_PINK", 1),
+			capacity.Blue:  intEnv("CAP_BLUE", 3),
+			capacity.Green: intEnv("CAP_GREEN", 5),
 		},
 	}
 }

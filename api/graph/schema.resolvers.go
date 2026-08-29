@@ -9,10 +9,9 @@ import (
 	"context"
 	"fmt"
 
-	"go.mongodb.org/mongo-driver/v2/bson"
-
 	"github.com/tktaofik/capacity-takehome/api/graph/model"
 	"github.com/tktaofik/capacity-takehome/api/internal/store"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // SendRequest is the resolver for the sendRequest field.

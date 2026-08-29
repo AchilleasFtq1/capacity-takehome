@@ -13,13 +13,13 @@ import "errors"
 type Tier string
 
 const (
-	Partner Tier = "PARTNER"
-	Crew    Tier = "CREW"
-	Circle  Tier = "CIRCLE"
+	Pink  Tier = "PINK"
+	Blue  Tier = "BLUE"
+	Green Tier = "GREEN"
 )
 
 // Tiers lists every tier, closest first.
-func Tiers() []Tier { return []Tier{Partner, Crew, Circle} }
+func Tiers() []Tier { return []Tier{Pink, Blue, Green} }
 
 // Caps is configuration, loaded at startup. Raising a cap must never require
 // a code change in the enforcement path.

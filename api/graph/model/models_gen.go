@@ -112,20 +112,20 @@ func (e RequestStatus) MarshalJSON() ([]byte, error) {
 type Tier string
 
 const (
-	TierPartner Tier = "PARTNER"
-	TierCrew    Tier = "CREW"
-	TierCircle  Tier = "CIRCLE"
+	TierPink  Tier = "PINK"
+	TierBlue  Tier = "BLUE"
+	TierGreen Tier = "GREEN"
 )
 
 var AllTier = []Tier{
-	TierPartner,
-	TierCrew,
-	TierCircle,
+	TierPink,
+	TierBlue,
+	TierGreen,
 }
 
 func (e Tier) IsValid() bool {
 	switch e {
-	case TierPartner, TierCrew, TierCircle:
+	case TierPink, TierBlue, TierGreen:
 		return true
 	}
 	return false
