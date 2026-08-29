@@ -1,0 +1,70 @@
+scalar Time
+
+enum Tier {
+  PARTNER
+  CREW
+  CIRCLE
+}
+
+enum RequestStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+type User {
+  id: ID!
+  name: String!
+}
+
+type Contact {
+  id: ID!
+  "The other person in the pair."
+  user: User!
+  tier: Tier!
+  createdAt: Time!
+}
+
+type TierCapacity {
+  tier: Tier!
+  used: Int!
+  cap: Int!
+}
+
+"""
+Note that budgetUsed may legally exceed budgetCap (a lowered cap, a merge).
+Nothing may assume used <= cap.
+"""
+type Capacity {
+  budgetUsed: Int!
+  budgetCap: Int!
+  tiers: [TierCapacity!]!
+}
+
+type Request {
+  id: ID!
+  from: User!
+  to: User!
+  tier: Tier!
+  status: RequestStatus!
+  createdAt: Time!
+}
+
+type Query {
+  "The caller, resolved from the X-User-Id header."
+  me: User!
+  "Everyone in the system, so the client can offer a user switcher."
+  users: [User!]!
+  contacts: [Contact!]!
+  capacity: Capacity!
+  incomingRequests: [Request!]!
+  outgoingRequests: [Request!]!
+}
+
+type Mutation {
+  sendRequest(toUserId: ID!, tier: Tier!): Request!
+  acceptRequest(requestId: ID!): Contact!
+  declineRequest(requestId: ID!): Request!
+  moveContact(contactId: ID!, tier: Tier!): Contact!
+  removeContact(contactId: ID!): Boolean!
+}

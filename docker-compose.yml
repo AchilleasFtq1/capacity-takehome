@@ -1,0 +1,21 @@
+services:
+  mongo:
+    image: mongo:8
+    container_name: capacity-mongo
+    # A single-node replica set, not a standalone: transactions need one.
+    command: ["--replSet", "rs0", "--bind_ip_all", "--port", "27117"]
+    ports:
+      - "27117:27117"
+    healthcheck:
+      test: >
+        mongosh --quiet --port 27117 --eval
+        "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27117'}]}).ok }"
+      interval: 3s
+      timeout: 10s
+      retries: 20
+      start_period: 3s
+    volumes:
+      - mongo-data:/data/db
+
+volumes:
+  mongo-data:
