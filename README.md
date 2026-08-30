@@ -96,7 +96,8 @@ driver retries it, and the retry re-reads counts the winner has already
 committed. *Rejected:* a denormalised `seatsUsed` counter with a conditional
 `$inc` — atomic, but it is a second source of truth that drifts from the actual
 contact rows, and reconciling it is a job nobody wants. Also rejected: trusting
-the transaction alone. See below, it does not work.
+the transaction alone — it does not work, and *How I know rule 4 actually holds*
+below shows it failing.
 
 **3. Refusals are sentences, built where the numbers are.** `capacity` returns
 sentinels; `contacts` turns a sentinel plus the caps, the counts and the
@@ -163,28 +164,22 @@ Rule 3 is asserted twice on purpose — once pure, once end to end — because
 "never check the budget here" is the rule a later refactor is most likely to
 tidy away.
 
-## Where the agent got it wrong
+### How I know rule 4 actually holds
 
-### The claim
+A green test that has never been shown to fail proves nothing, and rule 4 is
+exactly the rule where a serial test passes happily while production quietly
+oversells seats. So I built the wrong version on purpose and pointed the test at
+it.
 
-> *"Wrap the accept in a MongoDB transaction and the last seat is safe."*
+The wrong version is the tempting one: wrap the accept in a transaction and
+trust it. That does not work. MongoDB transactions give **snapshot** isolation,
+not serialisability, and snapshot isolation permits *write skew* — two accepts
+each read "7 of 8" from their own snapshot, then each insert a **different**
+contact document. WiredTiger detects conflicts per document, and these are
+different documents, so there is nothing to detect. Both commit. The user lands
+at 9 of 8 and no error is raised anywhere.
 
-This is what the tooling says, confidently and without hedging, and it is what
-most of the internet says. It is the obvious reading of "transactions make it
-atomic". It is also wrong, and wrong in the specific way that matters here.
-
-MongoDB transactions give **snapshot** isolation, not serialisability. Snapshot
-isolation does not prevent *write skew*. Two accepts each read "7 of 8" from
-their own snapshot, then each insert a **different** contact document.
-WiredTiger detects conflicts per document, and these are different documents —
-so there is no conflict to detect. Both commit. The user lands at 9 of 8, and
-nothing, anywhere, raises an error.
-
-### The test
-
-Rather than argue it from first principles, I built the wrong version and
-pointed the test at it. One line in `AcceptRequest`, with the transaction left
-completely intact:
+One line in `AcceptRequest`, transaction left completely intact:
 
 ```diff
 - locked, err := s.Store.LockSeats(ctx, caller, req.FromID)
@@ -197,43 +192,75 @@ Then, against a budget of exactly one seat:
 go test ./internal/store/ -run TestConcurrentAcceptsTakeOneSeat -count=8
 ```
 
-### The result
-
 ```
 --- FAIL: TestConcurrentAcceptsTakeOneSeat
     both accepts raced one free seat: 2 succeeded, 0 refused for capacity (want 1 and 1)
 ```
 
-Eight failures out of eight. Not flaky, not a timing window I got lucky with —
-the transaction never had a chance to help. Restoring `LockSeats` and re-running
-with `-count=15`: fifteen consecutive passes.
+Eight failures out of eight — not a timing window I got lucky with; the
+transaction never had a chance to help. Restoring `LockSeats` and re-running
+with `-count=15`: fifteen consecutive passes. It reproduces in about thirty
+seconds if you want to watch it fail.
 
-**To be straight about what this is:** I did not ship the broken version and get
-caught by the test. I reasoned my way to the seat lock first, and then went back
-and deliberately built the naive version to try to *break* my own test. The
-claim is what my tooling asserts confidently and falsely; the experiment is what
-settled it. That distinction is the part I would defend: a green test that has
-never once been shown to fail proves nothing, and rule 4 is exactly the rule
-where a serial test passes happily while production quietly oversells seats.
-The one-line experiment above reproduces in about thirty seconds, if you want to
-watch it fail.
+## Where the agent got it wrong
 
-### One I did actually get wrong
+Small, real, and mine. The interesting part is not the bug, it is that nothing
+in the toolchain was ever going to catch it.
 
-In `useAppData.ts` I called `setNotice(...)` from inside a `setState` updater.
-It type-checked, it would have worked most of the time, and it is wrong:
-updaters must be pure, React reserves the right to invoke them twice, and
-StrictMode would have produced duplicate banners. Nothing caught it — not the
-compiler, not `tsc`, not a test — I caught it re-reading my own diff before
-committing. Fixing it to a ref (`snapshotRef`) also surfaced a stale-closure bug
-in `refresh`, which had been capturing `state.snapshot` as a dependency and
-would have gone on refetching with an identity that churned every render.
+### The claim
+
+While writing the client's data hook, the agent needed a failed background
+refresh to leave the stale list on screen and raise a banner, rather than blank
+the page. It produced this, and presented it as the fix:
+
+```js
+setState((s) => {
+  if (s.snapshot) setNotice({ kind: 'fault', text: message });   // ← wrong
+  return { snapshot: s.snapshot, loading: false, fatal: s.snapshot ? null : message };
+});
+```
+
+The implicit claim is that a `setState` updater is a reasonable place to read
+current state *and* fire a second state update off the back of it. It reads
+sensibly, it solves the stated problem, and it is wrong: React updaters must be
+pure, and React reserves the right to invoke them more than once — under
+StrictMode it deliberately double-invokes, which would have produced duplicate
+banners.
+
+### How I caught it
+
+Re-reading my own diff before committing. That is the honest answer, and it is
+the uncomfortable part: **nothing automated caught this.** It compiles. `npx
+tsc --noEmit` passes clean — the types are all correct, because the bug is in
+*when* the function runs, not in what it takes or returns. There is no test in
+`mobile/` that would have failed. Every gate in `make check` is green on the
+broken version.
+
+So the only reason it isn't in the submission is that I read the code again
+after the tool told me it was done. That is not a process I would want to rely
+on twice.
+
+### The result
+
+Replaced with a ref (`snapshotRef`) that the callbacks read directly, so the
+notice is fired from the async handler where side effects belong. Fixing it
+surfaced a second bug I had not noticed: `refresh` had been taking
+`state.snapshot` as a `useCallback` dependency, so its identity churned on every
+render and the `useEffect` that depends on it would have refetched far more
+often than intended. One bad instinct, two bugs, zero of them caught by a
+machine.
 
 Two smaller ones, both self-inflicted: I hand-rolled an `itoa` instead of
 reaching for `strconv`, and I named a `Resolver` field `Contacts` where it
-silently shadowed the generated `Contacts()` resolver method — that one the
-compiler caught immediately, which is the difference between a language that
-helps and a runtime that does not.
+silently shadowed the generated `Contacts()` resolver method. That last one the
+compiler caught instantly — which is exactly the contrast: the Go mistake was
+free to find, and the React mistake cost a careful read.
+
+*(The rule-4 falsification is not in this section on purpose. I did not get that
+one wrong — I reasoned to the seat lock first and then built the naive version
+deliberately to try to break my own test. It is written up under [How I know
+rule 4 actually holds](#how-i-know-rule-4-actually-holds) as evidence, which is
+what it is.)*
 
 ## What I dropped, and why
 
