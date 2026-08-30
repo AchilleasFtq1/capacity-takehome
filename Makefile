@@ -1,4 +1,4 @@
-.PHONY: up down api mobile generate check clean
+.PHONY: up down api mobile generate check test-rules clean
 
 up:            ## start mongo (single-node replica set, so transactions work)
 	docker compose up -d
@@ -18,9 +18,16 @@ mobile:        ## run the expo client
 generate:      ## regenerate gqlgen code after editing graph/schema.graphqls
 	cd api && go run github.com/99designs/gqlgen generate
 
-check:         ## what we run before looking at your submission
+# `check` now depends on `up`. Rule 4 - two accepts racing for the last seat -
+# can only be proven against a real replica set, and its test skips itself when
+# Mongo is unreachable. Skipping it quietly would mean the one rule most likely
+# to be got wrong is also the one most likely to go unchecked.
+check: up      ## what we run before looking at your submission
 	cd api && go build ./... && go vet ./... && go test ./...
-	cd mobile && npx tsc --noEmit
+	cd mobile && npm install --silent && npx tsc --noEmit
+
+test-rules: up ## just the four rules, verbosely, with the race detector
+	cd api && go test ./internal/capacity/ ./internal/store/ -race -count=1 -v
 
 clean:
 	docker compose down -v
