@@ -7,24 +7,46 @@ person read the answer".
 
 ## Run it
 
-Needs Go 1.25+, Node 20+, Docker.
+Needs Go 1.25+, Node 20+, and Docker running.
+
+```bash
+git clone <this repo> capacity && cd capacity
+make check     # ~15s from cold. starts mongo, builds, vets, tests, type-checks
+```
+
+That is the whole setup. To use it:
 
 ```bash
 make up        # mongo on :27117 (replica set, so transactions work)
 make api       # graphql on :8080, seeds ten users on first boot
 make mobile    # expo — press i for the iOS simulator, w for web
-make check     # build + vet + go test + tsc. now depends on `up` (see below)
 make test-rules  # just the four rules, verbose, with -race
 ```
 
 Playground at <http://localhost:8080>. Copy any `id` from `{ users { id name } }`
 and send it as `X-User-Id`. The client has a user switcher in the header, so you
-can act as two people and watch a seat contended for.
+can act as two people and watch a seat be contended for.
 
-**One change to the harness:** `make check` now depends on `make up`. The rule 4
-test needs a real replica set and skips itself when Mongo is unreachable, and
-the rule most likely to be got wrong should not also be the one most likely to
-go unrun. If you want the old behaviour, `cd api && go test ./...`.
+### Two changes to the Makefile, and why
+
+`make check` now runs `make up` first, and installs the client's dependencies
+before type-checking. Both exist to make *green on clone* actually true, not to
+bend it — I verified by cloning this repo into an empty directory and running
+`make check` with nothing else set up: green in 13 seconds, against a fresh
+Mongo volume.
+
+- **`check` depends on `up`.** Rule 4 can only be proven against a real replica
+  set, and its test skips itself when Mongo is unreachable. Left alone, the rule
+  most likely to be got wrong is also the one most likely to go unrun. The test
+  still self-skips with a loud message rather than exploding, so nothing is
+  load-bearing on Docker except the proof itself.
+- **`check` runs `npm install --silent` first.** As shipped, `cd mobile && npx
+  tsc --noEmit` on a fresh clone **exits 1** — there is no `node_modules`, so
+  npx prints *"This is not the tsc command you are looking for"* and no
+  TypeScript is checked at all. I hit this on my first run. So the client half
+  of `check` was never green on clone; now it is.
+
+For the original behaviour without Docker: `cd api && go test ./...`.
 
 ## What's here
 
@@ -143,36 +165,75 @@ tidy away.
 
 ## Where the agent got it wrong
 
-**"It's in a transaction, so it's safe."** This is the confident wrong answer,
-and it is what you get from most tooling and most of the internet. MongoDB
-transactions give *snapshot* isolation, and snapshot isolation does not prevent
-write skew: two accepts read "7 of 8" from their own snapshots and then insert
-two *different* contact documents. Different documents means WiredTiger sees no
-conflict, both commit, and the user ends up at 9 of 8 — with no error anywhere.
+### The claim
 
-I didn't take my own reasoning on faith either. I replaced `LockSeats` with a
-plain `UsersByID` read — a read-then-write inside a perfectly good transaction —
-and ran the race test eight times:
+> *"Wrap the accept in a MongoDB transaction and the last seat is safe."*
+
+This is what the tooling says, confidently and without hedging, and it is what
+most of the internet says. It is the obvious reading of "transactions make it
+atomic". It is also wrong, and wrong in the specific way that matters here.
+
+MongoDB transactions give **snapshot** isolation, not serialisability. Snapshot
+isolation does not prevent *write skew*. Two accepts each read "7 of 8" from
+their own snapshot, then each insert a **different** contact document.
+WiredTiger detects conflicts per document, and these are different documents —
+so there is no conflict to detect. Both commit. The user lands at 9 of 8, and
+nothing, anywhere, raises an error.
+
+### The test
+
+Rather than argue it from first principles, I built the wrong version and
+pointed the test at it. One line in `AcceptRequest`, with the transaction left
+completely intact:
+
+```diff
+- locked, err := s.Store.LockSeats(ctx, caller, req.FromID)
++ locked, err := s.Store.UsersByID(ctx, []bson.ObjectID{caller, req.FromID})
+```
+
+Then, against a budget of exactly one seat:
+
+```bash
+go test ./internal/store/ -run TestConcurrentAcceptsTakeOneSeat -count=8
+```
+
+### The result
 
 ```
 --- FAIL: TestConcurrentAcceptsTakeOneSeat
-    both accepts raced one free seat: 2 succeeded, 0 refused (want 1 and 1)
+    both accepts raced one free seat: 2 succeeded, 0 refused for capacity (want 1 and 1)
 ```
 
-Every run, deterministically. Restored the lock: 15 consecutive passes. That
-falsification is the only reason I'd claim rule 4 holds — a green test that has
-never been shown to fail proves nothing, and this is exactly the rule where a
-serial test passes and production loses seats.
+Eight failures out of eight. Not flaky, not a timing window I got lucky with —
+the transaction never had a chance to help. Restoring `LockSeats` and re-running
+with `-count=15`: fifteen consecutive passes.
 
-**One I actually wrote and had to fix:** in `useAppData.ts` I called
-`setNotice(...)` from inside a `setState` updater. It type-checked, it would
-have worked most of the time, and it is wrong — updaters must be pure, React
-may invoke them twice, and StrictMode would have produced duplicate banners. No
-compiler or test caught it; I caught it re-reading the diff. It is now a ref
-(`snapshotRef`), which also removed a stale-closure bug in `refresh` that I had
-not noticed until I went looking. Smaller ones: a hand-rolled `itoa` instead of
-`strconv`, and a `Resolver.Contacts` field that silently shadowed the generated
-`Contacts()` resolver method until the compiler complained.
+**To be straight about what this is:** I did not ship the broken version and get
+caught by the test. I reasoned my way to the seat lock first, and then went back
+and deliberately built the naive version to try to *break* my own test. The
+claim is what my tooling asserts confidently and falsely; the experiment is what
+settled it. That distinction is the part I would defend: a green test that has
+never once been shown to fail proves nothing, and rule 4 is exactly the rule
+where a serial test passes happily while production quietly oversells seats.
+The one-line experiment above reproduces in about thirty seconds, if you want to
+watch it fail.
+
+### One I did actually get wrong
+
+In `useAppData.ts` I called `setNotice(...)` from inside a `setState` updater.
+It type-checked, it would have worked most of the time, and it is wrong:
+updaters must be pure, React reserves the right to invoke them twice, and
+StrictMode would have produced duplicate banners. Nothing caught it — not the
+compiler, not `tsc`, not a test — I caught it re-reading my own diff before
+committing. Fixing it to a ref (`snapshotRef`) also surfaced a stale-closure bug
+in `refresh`, which had been capturing `state.snapshot` as a dependency and
+would have gone on refetching with an identity that churned every render.
+
+Two smaller ones, both self-inflicted: I hand-rolled an `itoa` instead of
+reaching for `strconv`, and I named a `Resolver` field `Contacts` where it
+silently shadowed the generated `Contacts()` resolver method — that one the
+compiler caught immediately, which is the difference between a language that
+helps and a runtime that does not.
 
 ## What I dropped, and why
 
@@ -210,16 +271,12 @@ search, push, deployment, visual polish.
   would roll back to the older of the two. Correct for a human tapping a button;
   not correct in general.
 
-## Try the refusal in ten seconds
+## Try the refusal
 
-```bash
-# Fill a user to 3 Blue + 5 Green = 8 of 8, leaving Pink empty, then have
-# someone ask for the empty Pink seat. Rule 1: the budget answers first.
-```
-
-The demo path in the client: act as **You**, accept from the inbox until the
-budget reads 8/8, then accept the Pink request that is still waiting. Pink shows
-0/1 — visibly empty — and the refusal says:
+The shortest path to a refusal, entirely in the client: act as **You**, accept
+requests from the inbox until the budget reads **8 / 8**, then accept the Pink
+request still waiting. Pink shows **0 / 1** — visibly empty — and the refusal
+says:
 
 > You're using 8 of your 8 contact seats. Remove someone before you add anyone new.
 
