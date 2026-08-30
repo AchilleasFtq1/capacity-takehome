@@ -9,34 +9,72 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/tktaofik/capacity-takehome/api/graph/model"
-	"github.com/tktaofik/capacity-takehome/api/internal/store"
 	"go.mongodb.org/mongo-driver/v2/bson"
+
+	"github.com/tktaofik/capacity-takehome/api/graph/model"
+	"github.com/tktaofik/capacity-takehome/api/internal/capacity"
+	"github.com/tktaofik/capacity-takehome/api/internal/store"
 )
 
 // SendRequest is the resolver for the sendRequest field.
 func (r *mutationResolver) SendRequest(ctx context.Context, toUserID string, tier model.Tier) (*model.Request, error) {
-	panic(fmt.Errorf("not implemented: SendRequest - sendRequest"))
+	caller, err := store.CallerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	req, err := r.Service.SendRequest(ctx, caller, toUserID, toDomainTier(tier))
+	if err != nil {
+		return nil, err
+	}
+	return r.toModelRequest(ctx, *req)
 }
 
 // AcceptRequest is the resolver for the acceptRequest field.
 func (r *mutationResolver) AcceptRequest(ctx context.Context, requestID string) (*model.Contact, error) {
-	panic(fmt.Errorf("not implemented: AcceptRequest - acceptRequest"))
+	caller, err := store.CallerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	contact, err := r.Service.AcceptRequest(ctx, caller, requestID)
+	if err != nil {
+		return nil, err
+	}
+	return r.toModelContact(ctx, *contact)
 }
 
 // DeclineRequest is the resolver for the declineRequest field.
 func (r *mutationResolver) DeclineRequest(ctx context.Context, requestID string) (*model.Request, error) {
-	panic(fmt.Errorf("not implemented: DeclineRequest - declineRequest"))
+	caller, err := store.CallerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	req, err := r.Service.DeclineRequest(ctx, caller, requestID)
+	if err != nil {
+		return nil, err
+	}
+	return r.toModelRequest(ctx, *req)
 }
 
 // MoveContact is the resolver for the moveContact field.
 func (r *mutationResolver) MoveContact(ctx context.Context, contactID string, tier model.Tier) (*model.Contact, error) {
-	panic(fmt.Errorf("not implemented: MoveContact - moveContact"))
+	caller, err := store.CallerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	contact, err := r.Service.MoveContact(ctx, caller, contactID, toDomainTier(tier))
+	if err != nil {
+		return nil, err
+	}
+	return r.toModelContact(ctx, *contact)
 }
 
 // RemoveContact is the resolver for the removeContact field.
 func (r *mutationResolver) RemoveContact(ctx context.Context, contactID string) (bool, error) {
-	panic(fmt.Errorf("not implemented: RemoveContact - removeContact"))
+	caller, err := store.CallerID(ctx)
+	if err != nil {
+		return false, err
+	}
+	return r.Service.RemoveContact(ctx, caller, contactID)
 }
 
 // Me is the resolver for the me field.
@@ -72,22 +110,76 @@ func (r *queryResolver) Users(ctx context.Context) ([]model.User, error) {
 
 // Contacts is the resolver for the contacts field.
 func (r *queryResolver) Contacts(ctx context.Context) ([]model.Contact, error) {
-	panic(fmt.Errorf("not implemented: Contacts - contacts"))
+	caller, err := store.CallerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	docs, err := r.Store.ContactsFor(ctx, caller)
+	if err != nil {
+		return nil, fmt.Errorf("contacts: %w", err)
+	}
+	return r.toModelContacts(ctx, docs)
 }
 
 // Capacity is the resolver for the capacity field.
 func (r *queryResolver) Capacity(ctx context.Context) (*model.Capacity, error) {
-	panic(fmt.Errorf("not implemented: Capacity - capacity"))
+	caller, err := store.CallerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	snap, err := r.Service.Snapshot(ctx, caller)
+	if err != nil {
+		return nil, fmt.Errorf("capacity: %w", err)
+	}
+
+	// Every tier is reported, including the empty ones, so the client can render
+	// the whole ladder without knowing which tiers exist or what they hold.
+	tiers := make([]model.TierCapacity, 0, len(capacity.Tiers()))
+	for _, t := range capacity.Tiers() {
+		limit, _ := snap.Caps.Cap(t)
+		tiers = append(tiers, model.TierCapacity{
+			Tier: toModelTier(t),
+			Used: snap.Counts[t],
+			Cap:  limit,
+		})
+	}
+	return &model.Capacity{
+		BudgetUsed: snap.Counts.Total(),
+		BudgetCap:  snap.Caps.Budget,
+		Tiers:      tiers,
+	}, nil
 }
 
 // IncomingRequests is the resolver for the incomingRequests field.
 func (r *queryResolver) IncomingRequests(ctx context.Context) ([]model.Request, error) {
-	panic(fmt.Errorf("not implemented: IncomingRequests - incomingRequests"))
+	caller, err := store.CallerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// The inbox is what still needs an answer. Answered requests leave it.
+	docs, err := r.Store.RequestsWhere(ctx, bson.M{"toId": caller, "status": store.RequestPending})
+	if err != nil {
+		return nil, fmt.Errorf("incomingRequests: %w", err)
+	}
+	return r.toModelRequests(ctx, docs)
 }
 
 // OutgoingRequests is the resolver for the outgoingRequests field.
 func (r *queryResolver) OutgoingRequests(ctx context.Context) ([]model.Request, error) {
-	panic(fmt.Errorf("not implemented: OutgoingRequests - outgoingRequests"))
+	caller, err := store.CallerID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Declines are kept here, unlike the inbox: the sender is the one person who
+	// otherwise never finds out what happened to their request.
+	docs, err := r.Store.RequestsWhere(ctx, bson.M{
+		"fromId": caller,
+		"status": bson.M{"$in": []store.RequestStatus{store.RequestPending, store.RequestDeclined}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("outgoingRequests: %w", err)
+	}
+	return r.toModelRequests(ctx, docs)
 }
 
 // Mutation returns MutationResolver implementation.
