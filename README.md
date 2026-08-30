@@ -100,21 +100,32 @@ the transaction alone — it does not work, and *How I know rule 4 actually hold
 below shows it failing.
 
 **3. Refusals are sentences, built where the numbers are.** `capacity` returns
-sentinels; `contacts` turns a sentinel plus the caps, the counts and the
-person's name into `"Ada's Pink flag tier is full (1 of 1)"`; an error presenter
-passes refusals through verbatim and replaces everything else with a generic
-line after logging it. *Rejected:* returning codes and letting the client write
+sentinels; `contacts` turns a sentinel plus the caps and the counts into
+`"Your Pink flag tier is full (1 of 1). Move someone out of it, or choose
+another tier."`; an error presenter passes refusals through verbatim and
+replaces everything else with a generic line after logging it. *Rejected:* returning codes and letting the client write
 the copy — that puts a third copy of the rules in the UI, in the one place
 nobody tests, and it drifts the first time a cap changes.
 
-**4. The client never pre-checks capacity.** No greyed-out tiers, no hidden
+**4. A refusal about you is specific; a refusal about somebody else is not.**
+Your own is `"You're using 8 of your 8 contact seats"`. When an accept fails
+because the *sender* is full, all you get is `"Ada can't take another contact
+right now"` — no counts, no tier, no distance from a cap. Anyone able to send a
+request could otherwise probe a stranger's list one message at a time, and how
+full Ada is is a fact about Ada that Ada never agreed to publish. It costs no
+actionability, because you cannot free somebody else's seat.
+*Rejected:* symmetric messages, which read better and quietly turn the refusal
+into an oracle. `TestRefusalAboutSomeoneElseLeaksNothing` fails if the numbers
+come back.
+
+**5. The client never pre-checks capacity.** No greyed-out tiers, no hidden
 Accept buttons. Every destination is offered and the server refuses if it must.
 *Rejected:* disabling what will not fit, which reads as polish and is really a
 fourth copy of the rules — and it is wrong anyway, because a seat can free up
 between render and tap. This is also why the refusal banner is loud: it is the
 whole feedback mechanism, so it had better be legible.
 
-**5. The accepter is checked before the sender.** Both sides are checked, but
+**6. The accepter is checked before the sender.** Both sides are checked, but
 the accepter's own refusal is the one they can act on, so it wins when both are
 full.
 
@@ -159,6 +170,14 @@ and not for the tier" is.
 `api/internal/store/race_test.go` — six tests against a real replica set:
 the concurrent accept, both-sides-checked, remove-frees-both-seats,
 move-over-a-full-budget, duplicate-request-refused, pending-requests-hold-no-seat.
+
+`api/graph/schema_test.go` — six tests over real HTTP, through gqlgen and the
+error presenter: a refusal arrives as a sentence with a stable code, a refusal
+about somebody else leaks nothing about them, rule 3 holds end to end, a missing
+caller is refused rather than crashed, malformed input never echoes internals,
+and the capacity query reports every tier. This is why `PresentError` lives in
+`graph` and not in `func main` - a presenter that only exists inside the binary
+is one nothing can check.
 
 Rule 3 is asserted twice on purpose — once pure, once end to end — because
 "never check the budget here" is the rule a later refactor is most likely to
@@ -276,11 +295,6 @@ search, push, deployment, visual polish.
 
 ## What's next, and what's unfinished
 
-- **No test at the GraphQL layer.** The service is well covered and the
-  resolvers are thin pass-throughs, but "thin" is an assertion I made by
-  reading, not by testing. I verified the whole surface by hand over HTTP
-  (every mutation, every refusal, bad ids, missing header); that should be a
-  Go test against `handler.NewDefaultServer`.
 - **The seat lock is a hot document per user.** Correct, and fine at this scale,
   but every accept and removal touching a person serialises on one row. At real
   volume I would want to know how often the driver is retrying before defending
