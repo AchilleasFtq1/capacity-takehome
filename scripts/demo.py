@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 """Demo state for the capacity app. Standard library only, no install step.
 
-    python3 scripts/demo.py reset     put the database in the pre-demo state
-    python3 scripts/demo.py dryrun    walk the whole demo, asserting each step
-    python3 scripts/demo.py state     print who holds what
+    python3 scripts/demo.py reset             arm it: full at 8 of 8, Pink empty
+    python3 scripts/demo.py reset --lead-in   arm it one seat short, at 7 of 8
+    python3 scripts/demo.py dryrun            walk the taps, asserting each one
+    python3 scripts/demo.py state             print who holds what
 
-The demo is three taps and it proves all four rules:
+Default (`reset`) opens **already full**, so the refusal is the very first tap:
 
-    1. accept the Green request   -> the budget goes to 8 of 8
-    2. accept the Pink request    -> REFUSED, even though Pink shows 0 of 1
-    3. move a Blue contact to Pink -> ALLOWED at 8 of 8, because re-filing
+    1. accept the Pink request     -> REFUSED, though Pink shows 0 of 1
+    2. move a Blue contact to Pink -> ALLOWED at 8 of 8, because re-filing
                                       spends no seat
 
-`reset` leaves the database at step 0 so the sequence always cooperates.
-`dryrun` performs all three against the real API and fails loudly if any of
-them stops behaving, which is the point: run it before the call, not during.
+Two taps, and the refusal lands inside the first minute. The screen carries the
+argument on its own: budget 8/8, Blue 3/3, Green 5/5, and Pink the only tier
+with room - which is exactly the tier that gets refused.
+
+`--lead-in` starts a seat short with a Green request waiting, so tap one fills
+the budget on camera before the refusal. Costs a tap, buys the transition.
+
+`dryrun` performs every tap against the real API and fails loudly if any of them
+stops behaving, which is the point: run it before the call, not during.
 """
 
 import json
@@ -24,15 +30,15 @@ import urllib.request
 
 API = "http://localhost:8080/query"
 
-# The arithmetic matters and is easy to get wrong: the demo needs the budget to
-# land exactly on 8 of 8 with Pink still empty, so the refusal cannot be blamed
-# on Pink. Blue fills to its cap of 3, Green holds 4 and takes a 5th on the
-# first tap: 3 + 5 = 8, the whole budget, without ever touching Pink.
+# The arithmetic matters and is easy to get wrong. Blue at its cap of 3 plus
+# Green at its cap of 5 is exactly the budget of 8, with Pink never touched -
+# the only arrangement that fills the budget and leaves a visibly empty tier.
+# In --lead-in mode Green holds one fewer and Margaret's request supplies it.
 HERO = "You"
 BLUES = ["Grace", "Alan", "Katherine"]  # 3, Blue's cap
-GREENS = ["Barbara", "Edsger", "Radia", "Ada"]  # 4, one short of Green's cap
-FILLS_THE_BUDGET = "Margaret"  # the Green request that takes You from 7 to 8 of 8
-WANTS_THE_PINK_SEAT = "Ken"  # the Pink request that must then be refused
+GREENS = ["Barbara", "Edsger", "Radia", "Ada", "Margaret"]  # 5, Green's cap
+LEAD_IN_SENDER = "Margaret"  # held back in --lead-in, sends the Green request
+WANTS_THE_PINK_SEAT = "Ken"  # the Pink request that must be refused
 
 
 class Refused(Exception):
@@ -98,30 +104,40 @@ def connect(sender, receiver, tier):
     )
 
 
-def reset():
+def reset(lead_in=False):
+    """Arm the demo. Full at 8 of 8 by default; a seat short with --lead-in."""
     people = everyone()
     hero = people[HERO]
     wipe(people)
 
+    greens = [n for n in GREENS if not (lead_in and n == LEAD_IN_SENDER)]
     for name in BLUES:
         connect(people[name], hero, "BLUE")
-    for name in GREENS:
+    for name in greens:
         connect(people[name], hero, "GREEN")
 
-    # Two requests left waiting: one that fits, one that must be refused.
-    call(
-        people[FILLS_THE_BUDGET],
-        "mutation($t:ID!){ sendRequest(toUserId:$t,tier:GREEN){ id } }",
-        t=hero,
-    )
+    if lead_in:
+        # Held back so tap one fills the budget where everyone can see it.
+        call(
+            people[LEAD_IN_SENDER],
+            "mutation($t:ID!){ sendRequest(toUserId:$t,tier:GREEN){ id } }",
+            t=hero,
+        )
+
+    # The request that must be refused. Pink is empty; the budget answers first.
     call(
         people[WANTS_THE_PINK_SEAT],
         "mutation($t:ID!){ sendRequest(toUserId:$t,tier:PINK){ id } }",
         t=hero,
     )
 
+    waiting = [f"{WANTS_THE_PINK_SEAT} (Pink, must be refused)"]
+    if lead_in:
+        waiting.insert(0, f"{LEAD_IN_SENDER} (Green, fits)")
     print(f"{HERO} is now at  {describe(hero)}")
-    print(f"Inbox: {FILLS_THE_BUDGET} (Green, fits), {WANTS_THE_PINK_SEAT} (Pink, must be refused)")
+    print("Inbox: " + ", ".join(waiting))
+    if not lead_in:
+        print("Tap one IS the refusal. Pink is the only tier with room.")
     return people, hero
 
 
@@ -132,25 +148,32 @@ def inbox_request_from(hero, sender_name):
     sys.exit(f"No pending request from {sender_name}. Run `reset` first.")
 
 
-def dryrun():
-    people, hero = reset()
+def dryrun(lead_in=False):
+    people, hero = reset(lead_in)
+    print()
+    step = 0
+
+    if lead_in:
+        step += 1
+        print(f"STEP {step}  accept the Green request")
+        call(
+            hero,
+            "mutation($r:ID!){ acceptRequest(requestId:$r){ tier } }",
+            r=inbox_request_from(hero, LEAD_IN_SENDER)["id"],
+        )
+        print(f"        {describe(hero)}")
+
+    # However we got here, the board must read 8 of 8 with Pink empty, or the
+    # refusal that follows could be blamed on the tier instead of the budget.
+    board = capacity(hero)
+    assert board["budgetUsed"] == board["budgetCap"], "the budget is not full"
+    pink = next(t for t in board["tiers"] if t["tier"] == "PINK")
+    assert pink["used"] == 0, "Pink must be visibly empty"
+    print("        budget full, Pink empty. This is the setup for the refusal.")
     print()
 
-    print("STEP 1  accept the Green request")
-    call(
-        hero,
-        "mutation($r:ID!){ acceptRequest(requestId:$r){ tier } }",
-        r=inbox_request_from(hero, FILLS_THE_BUDGET)["id"],
-    )
-    after = capacity(hero)
-    print(f"        {describe(hero)}")
-    assert after["budgetUsed"] == after["budgetCap"], "step 1 did not fill the budget"
-    pink = next(t for t in after["tiers"] if t["tier"] == "PINK")
-    assert pink["used"] == 0, "Pink should still be empty and visibly so"
-    print("        budget full, Pink still empty. This is the setup for the refusal.")
-    print()
-
-    print("STEP 2  accept the Pink request  (the refusal)")
+    step += 1
+    print(f"STEP {step}  accept the Pink request  (the refusal)")
     try:
         call(
             hero,
@@ -162,11 +185,12 @@ def dryrun():
         assert refusal.code == "BUDGET_FULL", f"wrong reason: {refusal.code}"
         assert describe(hero).startswith("8/8"), "the refusal must change nothing"
     else:
-        sys.exit("STEP 2 FAILED: the Pink accept was allowed. Rule 1 is broken.")
+        sys.exit(f"STEP {step} FAILED: the Pink accept was allowed. Rule 1 is broken.")
     print("        Pink is 0 of 1 and still refused. Rule 1: the budget answers first.")
     print()
 
-    print("STEP 3  move a Blue contact into that empty Pink tier")
+    step += 1
+    print(f"STEP {step}  move a Blue contact into that empty Pink tier")
     blue = next(c for c in call(hero, "{ contacts { id tier } }")["contacts"] if c["tier"] == "BLUE")
     moved = call(
         hero,
@@ -179,16 +203,17 @@ def dryrun():
     print("        Allowed at 8 of 8. Rule 3: re-filing is not adding.")
     print()
 
-    print("All three steps behaved. Re-running reset so the demo is armed.")
-    reset()
+    print(f"All {step} steps behaved. Re-arming so the demo is ready.")
+    reset(lead_in)
 
 
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else "state"
+    lead_in = "--lead-in" in sys.argv[2:]
     if command == "reset":
-        reset()
+        reset(lead_in)
     elif command == "dryrun":
-        dryrun()
+        dryrun(lead_in)
     elif command == "state":
         print(describe(everyone()[HERO]))
     else:
